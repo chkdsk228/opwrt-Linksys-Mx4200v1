@@ -1,75 +1,14 @@
-name: Build linksys Firmware
+name: Build Firmware
 
-on:
-  workflow_dispatch:
-    inputs:
-      target:
-        description: 'Target platform'
-        required: true
-        default: 'linksys_mx4x00_immwrt'
-        type: choice
-        options:
-          - linksys_mx4x00_immwrt
+on: workflow_dispatch
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
-      with:
-        fetch-depth: 0
-
-    - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    - uses: actions/checkout@main
+    - name: Build
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install $(curl -fsSL https://is.gd/depends_ubuntu_2204)
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "Asia/Shanghai"
-        curl -fsSL https://raw.githubusercontent.com/immortalwrt/build-scripts/master/init_build_environment.sh | bash
-        df -h
-
-    - name: Build firmware
-      env:
-        WRT_CONFIG: configs/${{ github.event.inputs.target }}.config
-        WRT_TARGET: ${{ github.event.inputs.target }}
-      run: |
+        sudo apt update
+        sudo apt install -y build-essential
         ./build.sh
-
-    - name: Organize files
-      run: |
-        # 创建输出目录
-        mkdir -p output
-        # 复制固件文件并添加前缀
-        find ./bin/targets -name "*.bin" -exec cp {} output/VIKINGYFY-{} \;
-        find ./bin/targets -name "*.img" -exec cp {} output/VIKINGYFY-{} \;
-        find ./bin/targets -name "*.tar.gz" -exec cp {} output/VIKINGYFY-{} \;
-        
-        # 显示文件列表
-        ls -la output/
-
-    - name: Upload to Releases
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.event.inputs.target }}-$(date +%Y%m%d)
-        name: ${{ github.event.inputs.target }} Build $(date +%Y-%m-%d)
-        files: output/*
-        body: |
-          ## VIKINGYFY Custom Firmware
-          - Built on: $(date +%Y-%m-%d)
-          - Target: ${{ github.event.inputs.target }}
-          - Features:
-            - VIKINGYFY Theme and Settings
-            - OpenClash
-            - mwan3 Multi-WAN
-            - Kucat Theme
-            - Default IP: 192.168.10.1
-            - Default WiFi: OWRT / 12345678
-        draft: false
-        prerelease: false
