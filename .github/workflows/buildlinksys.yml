@@ -1,4 +1,4 @@
-name: Build VIKINGYFY Firmware
+name: Build linksys Firmware
 
 on:
   workflow_dispatch:
@@ -47,9 +47,9 @@ jobs:
         # 创建输出目录
         mkdir -p output
         # 复制固件文件并添加前缀
-        find ./bin/targets -name "*.bin" -exec cp {} output/chkdsk228-{} \;
-        find ./bin/targets -name "*.img" -exec cp {} output/chkdsk228-{} \;
-        find ./bin/targets -name "*.tar.gz" -exec cp {} output/chkdsk228-{} \;
+        find ./bin/targets -name "*.bin" -exec cp {} output/VIKINGYFY-{} \;
+        find ./bin/targets -name "*.img" -exec cp {} output/VIKINGYFY-{} \;
+        find ./bin/targets -name "*.tar.gz" -exec cp {} output/VIKINGYFY-{} \;
         
         # 显示文件列表
         ls -la output/
