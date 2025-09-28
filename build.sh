@@ -1,117 +1,112 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
-# Copyright (C) 2025 ZqinKing
+# Copyright (C) 2021 ImmortalWrt
+# <https://immortalwrt.org>
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# This is free software, licensed under the GNU General Public License v3.
+# See /LICENSE for more information.
 #
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-set -e
+set -eo pipefail
 
-BASE_PATH=$(cd $(dirname $0) && pwd)
+export LC_ALL=C
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-Dev=$1
-Build_Mod=$2
-
-CONFIG_FILE="$BASE_PATH/deconfig/$Dev.config"
-INI_FILE="$BASE_PATH/compilecfg/$Dev.ini"
-
-if [[ ! -f $CONFIG_FILE ]]; then
-    echo "Config not found: $CONFIG_FILE"
-    exit 1
-fi
-
-if [[ ! -f $INI_FILE ]]; then
-    echo "INI file not found: $INI_FILE"
-    exit 1
-fi
-
-read_ini_by_key() {
-    local key=$1
-    awk -F"=" -v key="$key" '$1 == key {print $2}' "$INI_FILE"
+# 清理工作目录
+clean_workspace() {
+	find . -maxdepth 1 -type f \( -name "*.config" -o -name "*.diff" -o -name "*.log" -o -name "*.patch" \) -delete
+	[ -d ./bin ] && rm -rf ./bin
+	[ -d ./build_dir ] && rm -rf ./build_dir
+	[ -d ./staging_dir ] && rm -rf ./staging_dir
+	[ -d ./tmp ] && rm -rf ./tmp
+	[ -d ./dl ] && rm -rf ./dl
+	[ -d ./feeds ] && rm -rf ./feeds
+	[ -f ./.config ] && rm -f ./.config
+	[ -f ./.config.old ] && rm -f ./.config.old
 }
 
-# 移除 uhttpd 依赖
-# 当启用luci-app-quickfile插件时，表示启动nginx，所以移除luci对uhttp(luci-light)的依赖
-remove_uhttpd_dependency() {
-    local config_path="$BASE_PATH/$BUILD_DIR/.config"
-    local luci_makefile_path="$BASE_PATH/$BUILD_DIR/feeds/luci/collections/luci/Makefile"
+# 基础配置
+basic_config() {
+	[ -f "$WRT_CONFIG" ] && cp -f "$WRT_CONFIG" .config || {
+		echo "ERROR: 配置文件 $WRT_CONFIG 不存在!"
+		exit 1
+	}
 
-    if grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" "$config_path"; then
-        if [ -f "$luci_makefile_path" ]; then
-            sed -i '/luci-light/d' "$luci_makefile_path"
-            echo "Removed uhttpd (luci-light) dependency as luci-app-quickfile (nginx) is enabled."
-        fi
-    fi
+	# 加载默认配置
+	make defconfig
 }
 
-# 应用配置文件
-apply_config() {
-    # 复制基础配置文件
-    \cp -f "$CONFIG_FILE" "$BASE_PATH/$BUILD_DIR/.config"
-    
-    # 如果是 ipq60xx 或 ipq807x 平台，则追加 NSS 配置
-    if grep -qE "(ipq60xx|ipq807x)" "$BASE_PATH/$BUILD_DIR/.config"; then
-        cat "$BASE_PATH/deconfig/nss.config" >> "$BASE_PATH/$BUILD_DIR/.config"
-    fi
-
-    # 追加代理配置
-    cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/$BUILD_DIR/.config"
+# 执行自定义脚本
+run_custom_scripts() {
+	local script_dir="./Scripts"
+	
+	if [ -d "$script_dir" ]; then
+		echo "开始执行自定义脚本..."
+		
+		# 执行第一阶段脚本
+		if [ -f "$script_dir/diy-part1.sh" ]; then
+			echo "执行diy-part1.sh..."
+			chmod +x "$script_dir/diy-part1.sh"
+			"$script_dir/diy-part1.sh"
+			echo "diy-part1.sh执行完成"
+		fi
+		
+		# 执行第二阶段脚本
+		if [ -f "$script_dir/diy-part2.sh" ]; then
+			echo "执行diy-part2.sh..."
+			chmod +x "$script_dir/diy-part2.sh"
+			"$script_dir/diy-part2.sh"
+			echo "diy-part2.sh执行完成"
+		fi
+		
+		# 执行第三阶段脚本
+		if [ -f "$script_dir/diy-part3.sh" ]; then
+			echo "执行diy-part3.sh..."
+			chmod +x "$script_dir/diy-part3.sh"
+			"$script_dir/diy-part3.sh"
+			echo "diy-part3.sh执行完成"
+		fi
+		
+		echo "所有自定义脚本执行完成"
+	else
+		echo "未找到Scripts目录，跳过自定义脚本执行"
+	fi
 }
 
-REPO_URL=$(read_ini_by_key "REPO_URL")
-REPO_BRANCH=$(read_ini_by_key "REPO_BRANCH")
-REPO_BRANCH=${REPO_BRANCH:-main}
-BUILD_DIR=$(read_ini_by_key "BUILD_DIR")
-COMMIT_HASH=$(read_ini_by_key "COMMIT_HASH")
-COMMIT_HASH=${COMMIT_HASH:-none}
+# 构建固件
+build_firmware() {
+	echo "开始构建固件..."
+	make -j$(nproc) || make -j1 V=s
+	
+	# 检查构建结果
+	if [ ! -d ./bin/targets ]; then
+		echo "ERROR: 固件构建失败!"
+		exit 1
+	fi
+	
+	echo "固件构建完成"
+}
 
-if [[ -d $BASE_PATH/action_build ]]; then
-    BUILD_DIR="action_build"
-fi
+# 主函数
+main() {
+	# 检查环境变量
+	[ -z "$WRT_CONFIG" ] && {
+		echo "ERROR: 请设置 WRT_CONFIG 环境变量!"
+		exit 1
+	}
 
-$BASE_PATH/update.sh "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
+	# 清理工作目录
+	clean_workspace
+	
+	# 执行自定义脚本
+	run_custom_scripts
+	
+	# 基础配置
+	basic_config
+	
+	# 构建固件
+	build_firmware
+}
 
-apply_config
-remove_uhttpd_dependency
-
-cd "$BASE_PATH/$BUILD_DIR"
-make defconfig
-
-if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
-    DISTFEEDS_PATH="$BASE_PATH/$BUILD_DIR/package/emortal/default-settings/files/99-distfeeds.conf"
-    if [ -d "${DISTFEEDS_PATH%/*}" ] && [ -f "$DISTFEEDS_PATH" ]; then
-        sed -i 's/aarch64_cortex-a53/x86_64/g' "$DISTFEEDS_PATH"
-    fi
-fi
-
-if [[ $Build_Mod == "debug" ]]; then
-    exit 0
-fi
-
-TARGET_DIR="$BASE_PATH/$BUILD_DIR/bin/targets"
-if [[ -d $TARGET_DIR ]]; then
-    find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec rm -f {} +
-fi
-
-make download -j$(($(nproc) * 2))
-make -j$(($(nproc) + 1)) || make -j1 V=s
-
-FIRMWARE_DIR="$BASE_PATH/firmware"
-\rm -rf "$FIRMWARE_DIR"
-mkdir -p "$FIRMWARE_DIR"
-find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec cp -f {} "$FIRMWARE_DIR/" \;
-\rm -f "$BASE_PATH/firmware/Packages.manifest" 2>/dev/null
-
-if [[ -d $BASE_PATH/action_build ]]; then
-    make clean
-fi
+# 执行主函数
+main "$@"
